@@ -344,9 +344,8 @@ interface Vlan80
  ip address 172.16.80.2 255.255.255.0
 !
 ip default-gateway 172.16.80.1
-ip http server
-ip http authentication local
-ip http secure-server
+no ip http server
+no ip http secure-server
 !
 ip scp server enable
 !
