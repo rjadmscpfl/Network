@@ -261,7 +261,6 @@ def git_commit_only(cfg: Config) -> Tuple[bool, str]:
         return True, "git commit skipped (GIT_ENABLED=False)"
 
     try:
-        # git repo 여부 확인
         subprocess.run(
             ["git", "rev-parse", "--is-inside-work-tree"],
             check=True,
@@ -269,10 +268,8 @@ def git_commit_only(cfg: Config) -> Tuple[bool, str]:
             text=True,
         )
 
-        # 변경사항 스테이징
         subprocess.run(["git", "add", "."], check=True)
 
-        # 변경사항 유무 확인
         status_proc = subprocess.run(
             ["git", "status", "--porcelain"],
             check=True,
@@ -404,13 +401,77 @@ def verify_login(device: Device, username: str, password: str, cfg: Config) -> T
         )
         shell = client.invoke_shell(width=200, height=1000)
         output = wait_for_output(shell, timeout=4.0, expect_prompt=True)
-        return True, output or "[VERIFY] login success"
+        return True, output or f"[VERIFY] login success for username={username}"
     except paramiko.AuthenticationException:
         return False, f"[VERIFY] authentication failed for username={username}"
     except socket.timeout:
         return False, f"[VERIFY] timeout while verifying username={username}"
     except Exception as e:
         return False, f"[VERIFY] verification failed for username={username}: {e}"
+    finally:
+        if client:
+            try:
+                client.close()
+            except Exception:
+                pass
+
+
+def connect_with_shell(
+    device: Device,
+    username: str,
+    password: str,
+    timeout: int,
+) -> Tuple[paramiko.SSHClient, object, str]:
+    client = open_ssh_client(
+        host=device.host,
+        port=device.ssh_port,
+        username=username,
+        password=password,
+        timeout=timeout,
+    )
+    shell = client.invoke_shell(width=200, height=1000)
+    banner = wait_for_output(shell, timeout=3.0, expect_prompt=True)
+    return client, shell, banner
+
+
+def detect_old_account_login_failure_reason(device: Device, cfg: Config, logs: List[str]) -> Tuple[str, str]:
+    """
+    Old account login failed when trying SSH_USERNAME/SSH_PASSWORD.
+    Try NEW_USERNAME/NEW_PASSWORD and classify more precisely.
+    """
+    def log(msg: str) -> None:
+        logs.append(msg)
+
+    log("[AUTH-RECOVERY] Old account authentication failed. Trying NEW account login for classification.")
+
+    client = None
+    try:
+        client, shell, banner = connect_with_shell(
+            device=device,
+            username=cfg.new_username,
+            password=cfg.new_password,
+            timeout=cfg.connect_timeout,
+        )
+        if banner:
+            log("[AUTH-RECOVERY] NEW account login success.")
+            log(mask_sensitive(banner, cfg))
+        return STATUS_SKIPPED, (
+            "old account auth failed, but new account login succeeded "
+            "(already changed or old account not present)"
+        )
+
+    except paramiko.AuthenticationException:
+        log("[AUTH-RECOVERY] NEW account authentication also failed.")
+        return STATUS_AUTH_FAIL, "both old and new account authentication failed"
+
+    except socket.timeout:
+        log("[AUTH-RECOVERY] Timeout while trying NEW account login.")
+        return STATUS_TIMEOUT, "timeout while classifying auth failure"
+
+    except Exception as e:
+        log(f"[AUTH-RECOVERY] Unexpected error while trying NEW account login: {e}")
+        return STATUS_ERROR, f"unexpected error while classifying auth failure: {e}"
+
     finally:
         if client:
             try:
@@ -465,6 +526,34 @@ def save_and_exit_config(shell, cfg: Config, logs: List[str], step_label: str) -
             log("[WARN] write memory success string not found, verify manually")
 
     return True, "ok"
+
+
+def check_user_exists_in_config(shell, username: str, cfg: Config, logs: List[str]) -> Tuple[bool, str]:
+    def log(msg: str) -> None:
+        logs.append(msg)
+
+    cmd = f"show running-config | include username {username}"
+    log(f"[STEP] Check user exists in config: {username}")
+    log(cmd)
+
+    out = send_command(shell, cmd, timeout=5.0)
+    log(mask_sensitive(out, cfg))
+
+    if has_cli_error(out):
+        return False, "unable to verify old user existence"
+
+    relevant_lines = []
+    for line in out.splitlines():
+        striped = line.strip()
+        if not striped:
+            continue
+        if striped.lower().startswith("show running-config"):
+            continue
+        if f"username {username}" in striped:
+            relevant_lines.append(striped)
+
+    exists = len(relevant_lines) > 0
+    return exists, "old user found in running-config" if exists else "old user not found in running-config"
 
 
 def delete_old_user_with_confirm(shell, cfg: Config, logs: List[str]) -> Tuple[bool, str]:
@@ -543,19 +632,30 @@ def rotate_account_on_switch(device: Device, cfg: Config) -> Tuple[str, str, str
         log(f"SSH PORT     : {device.ssh_port}")
         log("=" * SUMMARY_WIDTH)
 
-        log(f"[STEP 1] SSH connect with old account: {cfg.ssh_username}")
-        client = open_ssh_client(
-            host=device.host,
-            port=device.ssh_port,
-            username=cfg.ssh_username,
-            password=cfg.ssh_password,
-            timeout=cfg.connect_timeout,
-        )
+        # -------------------------------------------------
+        # STEP 1: Login with old/current account
+        # -------------------------------------------------
+        log(f"[STEP 1] SSH connect with old/current account: {cfg.ssh_username}")
 
-        shell = client.invoke_shell(width=200, height=1000)
-        banner = wait_for_output(shell, timeout=3.0, expect_prompt=True)
+        try:
+            client, shell, banner = connect_with_shell(
+                device=device,
+                username=cfg.ssh_username,
+                password=cfg.ssh_password,
+                timeout=cfg.connect_timeout,
+            )
+        except paramiko.AuthenticationException:
+            status, msg = detect_old_account_login_failure_reason(device, cfg, logs)
+            log(f"[RESULT] {status} - {msg}")
+            log(f"END TIME     : {now_str()}")
+            return status, "\n".join(logs), msg
+        except socket.timeout:
+            log("[RESULT] TIMEOUT - connection timeout during old/current account login")
+            log(f"END TIME     : {now_str()}")
+            return STATUS_TIMEOUT, "\n".join(logs), "connection timeout during old/current account login"
+
         if banner:
-            log("[RECV] Initial banner/prompt (old account)")
+            log("[RECV] Initial banner/prompt (old/current account)")
             log(mask_sensitive(banner, cfg))
 
         ok, msg = prepare_privileged_session(shell, cfg, logs)
@@ -564,6 +664,9 @@ def rotate_account_on_switch(device: Device, cfg: Config) -> Tuple[str, str, str
             log(f"END TIME     : {now_str()}")
             return STATUS_ERROR, "\n".join(logs), msg
 
+        # -------------------------------------------------
+        # STEP 2: Create new account
+        # -------------------------------------------------
         log("[STEP 2] Create NEW account")
         create_cmd = build_create_user_command(cfg)
         log(
@@ -589,6 +692,9 @@ def rotate_account_on_switch(device: Device, cfg: Config) -> Tuple[str, str, str
             pass
         client = None
 
+        # -------------------------------------------------
+        # STEP 3: Verify new account login
+        # -------------------------------------------------
         if cfg.verify_login:
             log(f"[STEP 3] Verify NEW login: {cfg.new_username}")
             verify_ok, verify_out = verify_login(
@@ -603,17 +709,26 @@ def rotate_account_on_switch(device: Device, cfg: Config) -> Tuple[str, str, str
                 log(f"END TIME     : {now_str()}")
                 return STATUS_ERROR, "\n".join(logs), "new user login verification failed"
 
+        # -------------------------------------------------
+        # STEP 4: Reconnect with new account
+        # -------------------------------------------------
         log(f"[STEP 4] SSH connect with new account: {cfg.new_username}")
-        client = open_ssh_client(
-            host=device.host,
-            port=device.ssh_port,
-            username=cfg.new_username,
-            password=cfg.new_password,
-            timeout=cfg.connect_timeout,
-        )
+        try:
+            client, shell, banner = connect_with_shell(
+                device=device,
+                username=cfg.new_username,
+                password=cfg.new_password,
+                timeout=cfg.connect_timeout,
+            )
+        except paramiko.AuthenticationException:
+            log("[RESULT] ERROR - cannot login with new account after creation")
+            log(f"END TIME     : {now_str()}")
+            return STATUS_ERROR, "\n".join(logs), "cannot login with new account after creation"
+        except socket.timeout:
+            log("[RESULT] TIMEOUT - connection timeout during new account login")
+            log(f"END TIME     : {now_str()}")
+            return STATUS_TIMEOUT, "\n".join(logs), "connection timeout during new account login"
 
-        shell = client.invoke_shell(width=200, height=1000)
-        banner = wait_for_output(shell, timeout=3.0, expect_prompt=True)
         if banner:
             log("[RECV] Initial banner/prompt (new account)")
             log(mask_sensitive(banner, cfg))
@@ -624,7 +739,45 @@ def rotate_account_on_switch(device: Device, cfg: Config) -> Tuple[str, str, str
             log(f"END TIME     : {now_str()}")
             return STATUS_ERROR, "\n".join(logs), f"{msg} on new account session"
 
+        # -------------------------------------------------
+        # STEP 5: Delete old account if configured
+        # -------------------------------------------------
         if cfg.delete_old_user:
+            old_user_exists, exists_msg = check_user_exists_in_config(shell, cfg.old_username, cfg, logs)
+            log(f"[STEP 5] {exists_msg}")
+
+            if not old_user_exists:
+                log("[STEP 5] Old user delete skipped because old user is not present")
+                ok, msg = save_and_exit_config(shell, cfg, logs, "after delete skipped")
+                if not ok:
+                    log(f"[RESULT] ERROR - {msg}")
+                    log(f"END TIME     : {now_str()}")
+                    return STATUS_ERROR, "\n".join(logs), msg
+
+                try:
+                    client.close()
+                except Exception:
+                    pass
+                client = None
+
+                if cfg.verify_login:
+                    log(f"[STEP 6] Final verify login with new account: {cfg.new_username}")
+                    verify_ok, verify_out = verify_login(
+                        device=device,
+                        username=cfg.new_username,
+                        password=cfg.new_password,
+                        cfg=cfg,
+                    )
+                    log(mask_sensitive(verify_out, cfg))
+                    if not verify_ok:
+                        log("[RESULT] ERROR - final new user login verification failed")
+                        log(f"END TIME     : {now_str()}")
+                        return STATUS_ERROR, "\n".join(logs), "final new user login verification failed"
+
+                log("[RESULT] SKIPPED - new user created, old user not found in running-config")
+                log(f"END TIME     : {now_str()}")
+                return STATUS_SKIPPED, "\n".join(logs), "new user created; old user not found in running-config"
+
             ok, msg = delete_old_user_with_confirm(shell, cfg, logs)
             if not ok:
                 log(f"[RESULT] ERROR - {msg}")
@@ -632,7 +785,7 @@ def rotate_account_on_switch(device: Device, cfg: Config) -> Tuple[str, str, str
                 return STATUS_ERROR, "\n".join(logs), msg
         else:
             log("[STEP 5] Old user deletion skipped by config")
-            log("[RESULT] SKIPPED - old user delete skipped")
+            log("[RESULT] SKIPPED - old user delete skipped by config")
             log(f"END TIME     : {now_str()}")
             return STATUS_SKIPPED, "\n".join(logs), "old user delete skipped by config"
 
@@ -648,6 +801,9 @@ def rotate_account_on_switch(device: Device, cfg: Config) -> Tuple[str, str, str
             pass
         client = None
 
+        # -------------------------------------------------
+        # STEP 6: Final verify
+        # -------------------------------------------------
         if cfg.verify_login:
             log(f"[STEP 6] Final verify login with new account: {cfg.new_username}")
             verify_ok, verify_out = verify_login(
@@ -665,11 +821,6 @@ def rotate_account_on_switch(device: Device, cfg: Config) -> Tuple[str, str, str
         log("[RESULT] SUCCESS - new user created and old user deleted on new account session")
         log(f"END TIME     : {now_str()}")
         return STATUS_SUCCESS, "\n".join(logs), "new user created and old user deleted successfully"
-
-    except paramiko.AuthenticationException:
-        log("[RESULT] AUTH_FAIL - authentication failed")
-        log(f"END TIME     : {now_str()}")
-        return STATUS_AUTH_FAIL, "\n".join(logs), "authentication failed"
 
     except socket.timeout:
         log("[RESULT] TIMEOUT - connection timeout")
