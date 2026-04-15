@@ -1,0 +1,3 @@
+﻿switch_host,access_port,mac_count,mac_list,suspicion,note
+192.168.75.2,Gi1/0/2,14,"0237.723a.fa70, 0c96.cdd5.182c, 265f.0ab9.e33e, 38f4.5e5e.1e84, 3ecc.c845.0932, 401a.58f7.945b, 401c.83bd.681b, 401c.83be.2026, 401c.83be.b4e6, 6291.f2e8.61e4, 7886.2e3a.e9ae, a4f9.3396.af2d, c257.8740.8a9e, ec74.d718.e224",HIGH,Multiple MACs on port - shared router / bridge / hub suspected
+192.168.75.2,Gi1/0/24,3,"085b.0ed4.c407, 8836.6c0c.5479, 9c6b.0037.640b",HIGH,Multiple MACs on port - shared router / bridge / hub suspected

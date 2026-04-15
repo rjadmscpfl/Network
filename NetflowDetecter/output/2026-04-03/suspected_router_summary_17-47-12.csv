@@ -1,0 +1,5 @@
+﻿src_ip,flow_count,unique_dst_ips,unique_dst_ports,total_bytes,dns_queries,web_flows,avg_duration,long_lived_flows,long_lived_ratio,score,risk,reason
+172.16.80.200,18,18,4,1048240,3,14,34.333333333333336,0,0.0,1,LOW,평균 세션 길이 김(34.3s)
+172.16.80.131,5,5,3,4640,1,4,6.4,0,0.0,1,LOW,평균 세션 길이 김(6.4s)
+172.16.80.201,5,5,3,4120,2,3,4.8,0,0.0,1,LOW,평균 세션 길이 김(4.8s)
+172.16.80.130,5,5,4,2980,2,2,4.4,0,0.0,1,LOW,평균 세션 길이 김(4.4s)

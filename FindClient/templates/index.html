@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Cisco MAC 주소 탐색기</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Segoe UI', sans-serif; background: #0f1117; color: #e0e0e0; min-height: 100vh; padding: 32px 16px; }
+    h1 { text-align: center; font-size: 1.5rem; margin-bottom: 28px; color: #7eb8f7; letter-spacing: 1px; }
+
+    .card { background: #1a1d27; border: 1px solid #2a2d3e; border-radius: 10px; padding: 24px; max-width: 640px; margin: 0 auto 24px; }
+
+    label { display: block; font-size: 0.8rem; color: #9aa0b4; margin-bottom: 4px; margin-top: 14px; }
+    label:first-of-type { margin-top: 0; }
+    input { width: 100%; background: #0f1117; border: 1px solid #2e3245; border-radius: 6px; padding: 9px 12px; color: #e0e0e0; font-size: 0.95rem; outline: none; transition: border-color .2s; }
+    input:focus { border-color: #7eb8f7; }
+
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+
+    .btn-row { display: grid; grid-template-columns: 1fr auto; gap: 10px; margin-top: 20px; }
+    button { padding: 11px; background: #2563eb; border: none; border-radius: 7px; color: #fff; font-size: 1rem; cursor: pointer; transition: background .2s; }
+    button:hover:not(:disabled) { background: #1d4ed8; }
+    button:disabled { background: #374151; cursor: not-allowed; }
+    #stop-btn { background: #dc2626; min-width: 90px; display: none; }
+    #stop-btn:hover:not(:disabled) { background: #b91c1c; }
+
+    #log-box { background: #0a0c13; border: 1px solid #2a2d3e; border-radius: 8px; padding: 14px 16px; max-width: 640px; margin: 0 auto 24px; height: 260px; overflow-y: auto; font-family: 'Consolas', monospace; font-size: 0.82rem; line-height: 1.6; display: none; }
+    .log-line { color: #9aa0b4; white-space: pre-wrap; word-break: break-all; }
+    .log-ok  { color: #4ade80; }
+    .log-err { color: #f87171; }
+    .log-sep { color: #374151; }
+
+    #result-box { max-width: 640px; margin: 0 auto; display: none; }
+    #result-box h2 { font-size: 1rem; color: #7eb8f7; margin-bottom: 12px; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+    th { background: #1a1d27; color: #9aa0b4; padding: 8px 10px; text-align: left; border-bottom: 1px solid #2a2d3e; }
+    td { padding: 8px 10px; border-bottom: 1px solid #1e2130; }
+    tr:last-child td { border-bottom: none; }
+    .no-result { color: #6b7280; text-align: center; padding: 16px 0; }
+  </style>
+</head>
+<body>
+  <h1>Cisco 스위치 MAC 주소 탐색기</h1>
+
+  <div class="card">
+    <label>시작 스위치 IP</label>
+    <input id="seed_ip" type="text" placeholder="192.168.1.1">
+
+    <div class="row">
+      <div>
+        <label>SSH 사용자명</label>
+        <input id="username" type="text" placeholder="admin">
+      </div>
+      <div>
+        <label>SSH 비밀번호</label>
+        <input id="password" type="password" placeholder="••••••••">
+      </div>
+    </div>
+
+    <label>Enable 비밀번호 <span style="color:#555">(없으면 비워두세요)</span></label>
+    <input id="secret" type="password" placeholder="••••••••">
+
+    <label>MAC 뒤 4자리</label>
+    <input id="suffix" type="text" maxlength="4" placeholder="4d5e">
+
+    <div class="btn-row">
+      <button id="btn" onclick="startSearch()">탐색 시작</button>
+      <button id="stop-btn" onclick="stopSearch()">중단</button>
+    </div>
+  </div>
+
+  <div id="log-box"></div>
+  <div id="result-box">
+    <h2 id="result-title"></h2>
+    <table id="result-table">
+      <thead>
+        <tr>
+          <th>스위치 IP</th><th>호스트명</th><th>MAC</th><th>VLAN</th><th>포트</th><th>타입</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <script>
+    let currentSearchId = null;
+
+    function startSearch() {
+      const fields = ['seed_ip','username','password','suffix'];
+      for (const f of fields) {
+        if (!document.getElementById(f).value.trim()) {
+          alert(`"${f}" 항목을 입력하세요.`); return;
+        }
+      }
+
+      const logBox = document.getElementById('log-box');
+      const resultBox = document.getElementById('result-box');
+      const btn = document.getElementById('btn');
+      const stopBtn = document.getElementById('stop-btn');
+
+      logBox.innerHTML = '';
+      logBox.style.display = 'block';
+      resultBox.style.display = 'none';
+      btn.disabled = true;
+      btn.textContent = '탐색 중...';
+      stopBtn.style.display = 'block';
+      stopBtn.disabled = false;
+      currentSearchId = null;
+
+      const body = {
+        seed_ip:  document.getElementById('seed_ip').value.trim(),
+        username: document.getElementById('username').value.trim(),
+        password: document.getElementById('password').value,
+        secret:   document.getElementById('secret').value,
+        suffix:   document.getElementById('suffix').value.trim(),
+      };
+
+      fetch('/search', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(body),
+      }).then(res => {
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = '';
+
+        function pump() {
+          reader.read().then(({ done, value }) => {
+            if (done) { finish(); return; }
+            buf += decoder.decode(value, { stream: true });
+            const parts = buf.split('\n\n');
+            buf = parts.pop();
+            for (const part of parts) {
+              const line = part.replace(/^data:\s*/, '');
+              if (!line) continue;
+              try {
+                const msg = JSON.parse(line);
+                handleMessage(msg);
+              } catch(e) {}
+            }
+            pump();
+          });
+        }
+        pump();
+      }).catch(err => {
+        appendLog('오류: ' + err, 'log-err');
+        finish();
+      });
+
+      function handleMessage(msg) {
+        if (msg.type === 'init') {
+          currentSearchId = msg.search_id;
+        } else if (msg.type === 'log') {
+          const text = msg.text;
+          let cls = 'log-line';
+          if (text.includes('✅') || text.includes('발견')) cls = 'log-ok';
+          else if (text.includes('❌') || text.includes('오류') || text.includes('실패')) cls = 'log-err';
+          else if (text.includes('⛔')) cls = 'log-err';
+          else if (text.startsWith('=')) cls = 'log-sep';
+          appendLog(text, cls);
+        } else if (msg.type === 'result') {
+          showResult(msg.data);
+        } else if (msg.type === 'error') {
+          appendLog('오류: ' + msg.text, 'log-err');
+        }
+      }
+
+      function appendLog(text, cls) {
+        const div = document.createElement('div');
+        div.className = cls;
+        div.textContent = text;
+        logBox.appendChild(div);
+        logBox.scrollTop = logBox.scrollHeight;
+      }
+
+      function showResult(data) {
+        resultBox.style.display = 'block';
+        document.getElementById('result-title').textContent = `검색 결과: ${data.length}건`;
+        const tbody = document.querySelector('#result-table tbody');
+        tbody.innerHTML = '';
+        if (data.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="6" class="no-result">검색된 MAC 주소가 없습니다.</td></tr>';
+          return;
+        }
+        for (const r of data) {
+          const tr = document.createElement('tr');
+          tr.innerHTML = `<td>${r.switch_ip}</td><td>${r.switch_hostname}</td><td>${r.mac_address}</td><td>${r.vlan}</td><td>${r.interface}</td><td>${r.mac_type}</td>`;
+          tbody.appendChild(tr);
+        }
+      }
+
+      function finish() {
+        btn.disabled = false;
+        btn.textContent = '탐색 시작';
+        stopBtn.style.display = 'none';
+        currentSearchId = null;
+      }
+    }
+
+    function stopSearch() {
+      if (!currentSearchId) return;
+      const stopBtn = document.getElementById('stop-btn');
+      stopBtn.disabled = true;
+      stopBtn.textContent = '중단 중...';
+      fetch(`/stop/${currentSearchId}`, { method: 'POST' });
+    }
+  </script>
+</body>
+</html>

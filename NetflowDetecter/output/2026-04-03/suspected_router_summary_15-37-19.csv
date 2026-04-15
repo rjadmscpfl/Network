@@ -1,0 +1,2 @@
+﻿src_ip,flow_count,unique_dst_ips,unique_dst_ports,total_bytes,dns_queries,web_flows,avg_duration,long_lived_flows,long_lived_ratio,score,risk,reason
+172.16.80.130,1,1,1,320,1,0,1.0,0,0.0,0,LOW,

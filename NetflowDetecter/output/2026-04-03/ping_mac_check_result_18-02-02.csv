@@ -1,0 +1,10 @@
+﻿ip,ping_alive,switch_name,local_arp_mac,switch_arp_mac,arp_interface,access_port,mac_count_on_port,suspicion,note,found_on_switch
+172.16.80.1,YES,CORE-01,0009.0f09.001a,0009.0f09.001a,Vlan80,Gi1/0/49,2,MEDIUM,2 MACs on port - verify IP Phone / daisy chain / bridge,YES
+172.16.80.12,YES,CORE-01,,84ba.597f.930f,Vlan80,Gi1/0/41,1,LOW,Single MAC on port,YES
+172.16.80.14,YES,CORE-02,047b.cb2e.a934,,,,,,ARP entry not found on this switch,NO
+172.16.80.16,YES,CORE-02,401c.83bd.f489,,,,,,ARP entry not found on this switch,NO
+172.16.80.101,YES,CORE-02,f4db.e6f1.6382,,,,,,ARP entry not found on this switch,NO
+172.16.80.110,YES,CORE-02,0001.5925.2d11,,,,,,ARP entry not found on this switch,NO
+172.16.80.111,YES,CORE-01,4431.9233.68cf,4431.9233.68cf,Vlan80,Gi1/0/45,1,LOW,Single MAC on port,YES
+172.16.80.120,YES,CORE-02,76c4.9d26.cd24,,,,,,ARP entry not found on this switch,NO
+172.16.80.250,YES,CORE-02,7c4d.8f5f.d3af,,,,,,ARP entry not found on this switch,NO

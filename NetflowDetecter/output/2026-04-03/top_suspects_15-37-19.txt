@@ -1,0 +1,7 @@
+====================================================================================================
+TOP SUSPECTED SHARED-ROUTER / NAT DEVICES
+====================================================================================================
+Run Time: 2026-04-03 15:37:19
+
+       src_ip risk  score  flow_count  unique_dst_ips  unique_dst_ports  dns_queries  web_flows  total_bytes  avg_duration  long_lived_ratio reason
+172.16.80.130  LOW      0           1               1                 1            1          0          320           1.0               0.0       
